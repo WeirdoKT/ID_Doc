@@ -1,56 +1,52 @@
 import cv2
 import numpy as np
-import pytesseract
-from scipy.ndimage import rotate
+from ultralytics import YOLO
+import math
 
-def correct_id_rotation(image_path):
-    # Read the image
-    image = cv2.imread(image_path)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
-    # Apply adaptive thresholding
-    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-    
-    # Find contours
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Find the largest contour (assuming it's the ID document)
-    largest_contour = max(contours, key=cv2.contourArea)
-    
-    # Get the minimum area rectangle
-    rect = cv2.minAreaRect(largest_contour)
-    box = cv2.boxPoints(rect)
-    box = np.int0(box)
-    
-    # Get the angle of rotation
-    angle = rect[-1]
-    if angle < -45:
-        angle = 90 + angle
-    
-    # Rotate the image
+def calculate_angle(box):
+    # Assuming box coordinates are in the format [x1, y1, x2, y2, x3, y3, x4, y4]
+    # where (x1, y1) is top-left, (x2, y2) is top-right, (x3, y3) is bottom-right, (x4, y4) is bottom-left
+    x1, y1, x2, y2 = box[0], box[1], box[2], box[3]
+    angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
+    return angle
+
+def rotate_image(image, angle):
     (h, w) = image.shape[:2]
     center = (w // 2, h // 2)
     M = cv2.getRotationMatrix2D(center, angle, 1.0)
     rotated = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-    
-    # Check if the rotation is correct using OCR
-    ocr_text = pytesseract.image_to_string(rotated)
-    if len(ocr_text.strip()) < 10:  # If very little text is detected, try 90-degree rotations
-        for angle in [90, 180, 270]:
-            temp_rotated = rotate(rotated, angle)
-            temp_ocr_text = pytesseract.image_to_string(temp_rotated)
-            if len(temp_ocr_text.strip()) > len(ocr_text.strip()):
-                rotated = temp_rotated
-                ocr_text = temp_ocr_text
-    
     return rotated
 
-# Usage
-input_image_path = "path_to_your_id_document.jpg"
-corrected_image = correct_id_rotation(input_image_path)
+def main():
+    # Load the YOLOv8n model
+    model = YOLO('yolov8n.pt')
 
-# Save or display the result
-cv2.imwrite("corrected_id_document.jpg", corrected_image)
-cv2.imshow("Corrected ID Document", corrected_image)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+    # Load the input image
+    image_path = 'path/to/your/image.jpg'
+    image = cv2.imread(image_path)
+
+    # Run YOLOv8n prediction
+    results = model(image)
+
+    # Get the bounding box coordinates for the ID document class
+    # Assuming the ID document class index is 0, adjust if necessary
+    boxes = results[0].boxes.xyxy.cpu().numpy()
+    if len(boxes) == 0:
+        print("No ID document detected in the image.")
+        return
+
+    # Calculate the rotation angle based on the first detected box
+    box = boxes[0]
+    angle = calculate_angle(box)
+
+    # Rotate the image
+    rotated_image = rotate_image(image, -angle)  # Negative angle to correct the rotation
+
+    # Save the rotated image
+    output_path = 'path/to/output/rotated_image.jpg'
+    cv2.imwrite(output_path, rotated_image)
+
+    print(f"Image rotated by {angle:.2f} degrees and saved to {output_path}")
+
+if __name__ == "__main__":
+    main()
